@@ -10,7 +10,7 @@ import (
 
 type Server interface {
 	Address() string
-	isAlive() bool
+	IsAlive() bool
 	Serve(rw http.ResponseWriter, r *http.Request)
 }
 
@@ -50,4 +50,49 @@ func handleErr(err error) {
 		fmt.Printf("error: %v \n", err)
 		os.Exit(1)
 	}
+}
+
+func (s *simpleServer) Address() string { return s.addr }
+
+func (s *simpleServer) IsAlive() bool { return true }
+
+func (s *simpleServer) Serve(rw http.ResponseWriter, r *http.Request) {
+	s.proxy.ServeHTTP(rw, r)
+}
+
+func (lb *LoadBalancer) getNextAvailableServer() Server {
+	server := lb.servers[lb.roundRobinCount%len(lb.servers)]
+
+	for server.IsAlive() {
+		lb.roundRobinCount++
+		server = lb.servers[lb.roundRobinCount%len(lb.servers)]
+	}
+	lb.roundRobinCount++
+	return server
+}
+
+func (lb *LoadBalancer) serveProxy(rw http.ResponseWriter, r *http.Request) {
+	targetServer := lb.getNextAvailableServer()
+	fmt.Printf("forwarding request to address %q\n", targetServer.Address())
+
+	targetServer.Serve(rw, r)
+
+}
+
+func main() {
+	servers := []Server{
+		newSimpleServer("https://www.facebook.com"),
+		newSimpleServer("http://www.bing.com"),
+		newSimpleServer("http://www.duckduckgo.com"),
+	}
+
+	lb := NewLoadBalancer("8080", servers)
+
+	handleRedirect := func(rw http.ResponseWriter, r *http.Request) {
+		lb.serveProxy(rw, r)
+	}
+	http.HandleFunc("/", handleRedirect)
+
+	fmt.Printf("serving request at 'localhost:%s'\n", lb.port)
+	http.ListenAndServe(":"+lb.port, nil)
 }
